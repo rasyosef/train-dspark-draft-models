@@ -27,6 +27,7 @@ generation uses both T4s either way; the modes diverge once training starts.
 | Runs on 1 GPU? | yes | not really — the server would have to share the card with the trainer |
 | Cost | one extra extraction pass, and a lot of disk | no disk overhead, but the verifier occupies a GPU for the whole run |
 | Samples | 1200 | 1600 |
+| Wall clock (2× T4) | 5 h 53 min (1200 samples) | 8 h 54 min (1600 samples) |
 
 **Offline is strongly recommended if you have a single GPU** — it materializes the hidden states,
 frees the card, and then gives the whole thing to training, whereas online has the server and the
@@ -34,37 +35,53 @@ trainer competing for the same memory the entire run. With two or more GPUs both
 still trains twice as wide, so pick online mainly when disk, not GPU count, is the tighter
 constraint.
 
+The wall-clock row is whole-notebook time — clone to Hub upload — at each notebook's own sample
+count, so it is not a clean head-to-head. The three-hour gap runs the same direction as the
+recommendation anyway: offline finishes sooner *despite* paying for an extra extraction pass,
+because training gets both cards. Runtime is roughly linear in the sample count, so scale these
+figures with the knob below.
+
 ## Run it
 
-[`[offline] train-dspark-drafter-qwen-3-0.6b.ipynb`](notebooks/%5Boffline%5D%20train-dspark-drafter-qwen-3-0.6b.ipynb)
-— clone `speculators` → regenerate + tokenize data → serve the verifier → extract hidden states →
+**Prerequisites:** `vllm>=0.22.0`, a GPU (two if you want the online notebook), and a Hugging Face
+write token for the upload step. Everything else installs from inside the notebooks.
+
+### 1. Train a drafter — pick one
+
+[**`[offline] train-dspark-drafter-qwen-3-0.6b.ipynb`**](notebooks/%5Boffline%5D%20train-dspark-drafter-qwen-3-0.6b.ipynb)
+
+clone `speculators` → regenerate + tokenize data → serve the verifier → extract hidden states →
 **stop the server** → train on both GPUs → push to
 [`yosefw/Qwen3-0.6B-DSpark-v2`](https://huggingface.co/yosefw/Qwen3-0.6B-DSpark-v2).
 
-[`[online] train-dspark-drafter-qwen-3-0.6b.ipynb`](notebooks/%5Bonline%5D%20train-dspark-drafter-qwen-3-0.6b.ipynb)
-— clone `speculators` → regenerate + tokenize data → serve the verifier → train against it live →
+[**`[online] train-dspark-drafter-qwen-3-0.6b.ipynb`**](notebooks/%5Bonline%5D%20train-dspark-drafter-qwen-3-0.6b.ipynb)
+
+clone `speculators` → regenerate + tokenize data → serve the verifier → train against it live →
 push to [`yosefw/Qwen3-0.6B-DSpark`](https://huggingface.co/yosefw/Qwen3-0.6B-DSpark).
 
-[`evaluate-dspark-qwen-3-0.6b.ipynb`](notebooks/evaluate-dspark-qwen-3-0.6b.ipynb)
-— clone `speculators` → serve the drafter in vLLM, which pulls in its verifier automatically →
+Both write `output/checkpoints/checkpoint_best` and upload it to the Hub. Budget for a long
+session: end to end on 2× T4 the offline notebook took **5 h 53 min** and the online one
+**8 h 54 min** — both fit a 12 h Kaggle session, neither by a comfortable margin. The sample count
+below is the lever if you need them shorter.
+
+**The one knob that matters** is the sample count, and it appears in more than one place: `--limit`
+on response regeneration and `--max-samples` on `prepare_data.py` must always move together
+(offline has a third one to match, on `data_generation_offline.py`). The defaults are 1200 offline
+and 1600 online; drop them to ~200 to smoke-test the pipeline, and raise them well beyond the
+defaults for a drafter you actually plan to deploy.
+
+### 2. Evaluate it
+
+[**`evaluate-dspark-qwen-3-0.6b.ipynb`**](notebooks/evaluate-dspark-qwen-3-0.6b.ipynb)
+
+clone `speculators` → serve the drafter in vLLM, which pulls in its verifier automatically →
 `evaluate.py throughput` → acceptance metrics in `acceptance.csv`. Its `sweep` subcommand runs the
 full performance benchmark instead, across all 9
 [`RedHatAI/speculator_benchmarks`](https://huggingface.co/datasets/RedHatAI/speculator_benchmarks)
 subsets.
 
-## Both training notebooks
-
-**Needs:** `vllm>=0.22.0` and an HF write token for the last step.
-
-**Main knob:** the sample count — `--limit` on response regeneration and `--max-samples` on
-`prepare_data.py` must always move together (offline has a third one to match, on
-`data_generation_offline.py`). The defaults are 1200 offline and 1600 online; drop them to ~200 to
-smoke-test the pipeline, and raise them well beyond the defaults for a drafter you actually plan to
-deploy.
-
-**Output:** `output/checkpoints/checkpoint_best`, uploaded to the Hub. Point the
-[evaluation notebook](notebooks/evaluate-dspark-qwen-3-0.6b.ipynb) at it — either the Hub id or the
-local checkpoint path — to measure its acceptance rate.
+Point it at either the Hub id or the local `checkpoint_best` path from step 1. Takes about
+**40 min** on 2× T4, most of it model download and server startup.
 
 ## Trained models
 
@@ -111,3 +128,8 @@ Based on the official speculators
 [training](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/) and
 [evaluating performance](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/evaluating_performance/)
 tutorials.
+
+## License
+
+Apache-2.0 — see [`LICENSE`](LICENSE). Builds on
+[`speculators`](https://github.com/vllm-project/speculators), also Apache-2.0.
