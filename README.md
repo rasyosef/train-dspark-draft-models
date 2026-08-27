@@ -10,7 +10,33 @@ it agrees with — same output, faster. [DSpark](https://arxiv.org/abs/2607.0514
 block at a time and conditions on the verifier's hidden states, which is why a vLLM server runs
 during training. Built on [vllm-project/speculators](https://github.com/vllm-project/speculators).
 
-## Which notebook
+## Contents
+
+- [What's in here](#whats-in-here)
+- [Choosing a training mode](#choosing-a-training-mode)
+- [Run it](#run-it)
+  - [1. Train a drafter — pick one](#1-train-a-drafter--pick-one)
+  - [2. Evaluate it](#2-evaluate-it)
+- [Trained models](#trained-models)
+  - [Evaluation](#evaluation)
+- [License](#license)
+
+## What's in here
+
+```
+.
+├── notebooks/
+│   ├── [offline] train-dspark-drafter-qwen-3-0.6b.ipynb
+│   ├── [online] train-dspark-drafter-qwen-3-0.6b.ipynb
+│   └── evaluate-dspark-qwen-3-0.6b.ipynb
+├── LICENSE
+└── README.md
+```
+
+Everything runs inside the notebooks — there is no package to install from this repo, and
+`speculators` is cloned by each notebook at run time.
+
+## Choosing a training mode
 
 `speculators` can source hidden states three ways — **online** (fetched from a live vLLM server on
 demand and discarded), **offline** (all pre-generated to disk before training), and **hybrid**
