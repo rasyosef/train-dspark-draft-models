@@ -24,13 +24,13 @@ generation uses both T4s either way; the modes diverge once training starts.
 | Hidden states | extracted up front into `./output/hidden_states`, read via `--hidden-states-path` | fetched from the endpoint per batch (`--on-missing generate --on-generate delete`) |
 | vLLM server | shut down *before* training starts | must stay up for the entire training run |
 | Training | both T4s (`CUDA_VISIBLE_DEVICES=0,1`, `--nproc_per_node 2`) | GPU 1 only (`--nproc_per_node 1`) — GPU 0 is hosting the verifier |
-| Runs on 1 GPU? | yes | not really — the server would have to share the card with the trainer |
+| Runs on 1 GPU? | yes | not really — the server would have to share the GPU with the trainer |
 | Cost | one extra extraction pass, and a lot of disk | no disk overhead, but the verifier occupies a GPU for the whole run |
 | Samples | 1200 | 1600 |
 | Wall clock (2× T4) | 5 h 53 min (1200 samples) | 8 h 54 min (1600 samples) |
 
 **Offline is strongly recommended if you have a single GPU** — it materializes the hidden states,
-frees the card, and then gives the whole thing to training, whereas online has the server and the
+frees the GPU, and then gives the whole thing to training, whereas online has the server and the
 trainer competing for the same memory the entire run. With two or more GPUs both work: offline
 still trains twice as wide, so pick online mainly when disk, not GPU count, is the tighter
 constraint.
@@ -38,7 +38,7 @@ constraint.
 The wall-clock row is whole-notebook time — clone to Hub upload — at each notebook's own sample
 count, so it is not a clean head-to-head. The three-hour gap runs the same direction as the
 recommendation anyway: offline finishes sooner *despite* paying for an extra extraction pass,
-because training gets both cards. Runtime is roughly linear in the sample count, so scale these
+because training gets both GPUs. Runtime is roughly linear in the sample count, so scale these
 figures with the knob below.
 
 ## Run it
