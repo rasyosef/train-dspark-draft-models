@@ -2,8 +2,8 @@
 
 Train a **DSpark draft model** for speculative decoding, with
 [`Qwen/Qwen3-0.6B`](https://huggingface.co/Qwen/Qwen3-0.6B) as the verifier. Two notebooks do the
-same job in two ways — **offline** and **online** — and differ only in where the verifier's hidden
-states come from.
+training job in two ways — **offline** and **online** — and differ only in where the verifier's
+hidden states come from. A third notebook evaluates the drafter that comes out.
 
 A drafter guesses several tokens ahead, the verifier checks them in one forward pass and keeps what
 it agrees with — same output, faster. [DSpark](https://arxiv.org/abs/2607.05147) drafts a whole
@@ -45,7 +45,14 @@ constraint.
 — clone `speculators` → regenerate + tokenize data → serve the verifier → train against it live →
 push to [`yosefw/Qwen3-0.6B-DSpark`](https://huggingface.co/yosefw/Qwen3-0.6B-DSpark).
 
-## Both notebooks
+[`evaluate-dspark-qwen-3-0.6b.ipynb`](notebooks/evaluate-dspark-qwen-3-0.6b.ipynb)
+— clone `speculators` → serve the drafter in vLLM, which pulls in its verifier automatically →
+`evaluate.py throughput` → acceptance metrics in `acceptance.csv`. Its `sweep` subcommand runs the
+full performance benchmark instead, across all 9
+[`RedHatAI/speculator_benchmarks`](https://huggingface.co/datasets/RedHatAI/speculator_benchmarks)
+subsets.
+
+## Both training notebooks
 
 **Needs:** `vllm>=0.22.0` and an HF write token for the last step.
 
@@ -55,8 +62,9 @@ push to [`yosefw/Qwen3-0.6B-DSpark`](https://huggingface.co/yosefw/Qwen3-0.6B-DS
 smoke-test the pipeline, and raise them well beyond the defaults for a drafter you actually plan to
 deploy.
 
-**Output:** `output/checkpoints/checkpoint_best`, uploaded to the Hub. Load it in vLLM as the
-speculative model and check the acceptance rate.
+**Output:** `output/checkpoints/checkpoint_best`, uploaded to the Hub. Point the
+[evaluation notebook](notebooks/evaluate-dspark-qwen-3-0.6b.ipynb) at it — either the Hub id or the
+local checkpoint path — to measure its acceptance rate.
 
 ## Trained models
 
@@ -68,13 +76,14 @@ The drafters these notebooks produced, on the Hugging Face Hub:
 | [`yosefw/Qwen3-0.6B-DSpark`](https://huggingface.co/yosefw/Qwen3-0.6B-DSpark) | online, 1600 samples | [`Qwen/Qwen3-0.6B`](https://huggingface.co/Qwen/Qwen3-0.6B) |
 
 Both are trained on small sample counts, so treat them as pipeline demonstrations rather than
-deployment-ready drafters. Load one in vLLM as the speculative model for `Qwen3-0.6B` and check the
-acceptance rate.
+deployment-ready drafters.
 
 ### Evaluation
 
 Per-subset results for [`yosefw/Qwen3-0.6B-DSpark`](https://huggingface.co/yosefw/Qwen3-0.6B-DSpark)
-(the online-mode drafter, trained on 1600 samples):
+(the online-mode drafter, trained on 1600 samples), produced by
+[`evaluate-dspark-qwen-3-0.6b.ipynb`](notebooks/evaluate-dspark-qwen-3-0.6b.ipynb) —
+`evaluate.py throughput` against a vLLM server running the drafter on 2× T4:
 
 | subset | num_drafts | num_draft_tokens | num_accepted_tokens | acceptance_length | acceptance_at_pos_0 | acceptance_at_pos_1 | acceptance_at_pos_2 | acceptance_at_pos_3 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -98,5 +107,7 @@ Acceptance is highest on `math_reasoning` (1.970) and `HumanEval` (1.871) and lo
 token is most predictable. Across all subsets, weighted by `num_drafts`, acceptance length is
 **1.806** (435,398 accepted tokens over 539,885 drafts).
 
-Based on the official
-[speculators training tutorial](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/).
+Based on the official speculators
+[training](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/) and
+[evaluating performance](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/evaluating_performance/)
+tutorials.
