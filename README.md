@@ -1,161 +1,108 @@
-# train-dspark-draft-models
+# train-dspark
 
-Train a **DSpark draft model** for speculative decoding, with
-[`Qwen/Qwen3-0.6B`](https://huggingface.co/Qwen/Qwen3-0.6B) as the verifier. Two notebooks do the
-training job in two ways — **offline** and **online** — and differ only in where the verifier's
-hidden states come from. A third notebook evaluates the drafter that comes out.
+Train and evaluate a [DSpark](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/dspark/) draft model for `Llama-3.2-1B-Instruct`, using the [`speculators`](https://github.com/vllm-project/speculators) library and vLLM.
 
-A drafter guesses several tokens ahead, the verifier checks them in one forward pass and keeps what
-it agrees with — same output, faster. [DSpark](https://arxiv.org/abs/2607.05147) drafts a whole
-block at a time and conditions on the verifier's hidden states, which is why a vLLM server runs
-during training. Built on [vllm-project/speculators](https://github.com/vllm-project/speculators).
+- **Drafter** — 2 layers, ~0.25B params, proposes 4 tokens per cycle.
+- **Verifier** — the full `Llama-3.2-1B-Instruct`, checks each block in one forward pass, so output is identical to running it alone.
+- **Result** — **2.404** tokens accepted per verification round, 2.927 on HumanEval.
+- **Scope** — two notebooks: regenerate the data, train online against a live vLLM verifier, then serve and benchmark.
 
 ## Contents
 
 - [What's in here](#whats-in-here)
-- [Choosing a training mode](#choosing-a-training-mode)
+- [Pipeline](#pipeline)
 - [Run it](#run-it)
-  - [1. Train a drafter — pick one](#1-train-a-drafter--pick-one)
-  - [2. Evaluate it](#2-evaluate-it)
-- [Trained models](#trained-models)
-  - [Evaluation](#evaluation)
-- [License](#license)
+- [Model](#model)
+- [Evaluation](#evaluation)
+- [Usage](#usage)
+- [Credits and license](#credits-and-license)
 
 ## What's in here
 
 ```
 .
 ├── notebooks/
-│   ├── [offline] train-dspark-drafter-qwen-3-0.6b.ipynb
-│   ├── [online] train-dspark-drafter-qwen-3-0.6b.ipynb
-│   └── evaluate-dspark-qwen-3-0.6b.ipynb
+│   ├── data-preparation.ipynb
+│   ├── train-llama-3.2-1b-instruct-dspark-online.ipynb
+│   └── qwen-3-0.6b/
 ├── LICENSE
 └── README.md
 ```
 
-Everything runs inside the notebooks — there is no package to install from this repo, and
-`speculators` is cloned by each notebook at run time.
+Everything runs inside the notebooks. Nothing to install; `speculators` is cloned at run time.
 
-## Choosing a training mode
+`notebooks/qwen-3-0.6b/` is an earlier drafter trained against `Qwen/Qwen3-0.6B`, in both offline and online modes — see [its own README](notebooks/qwen-3-0.6b/README.md).
 
-`speculators` can source hidden states three ways — **online** (fetched from a live vLLM server on
-demand and discarded), **offline** (all pre-generated to disk before training), and **hybrid**
-(generated during epoch 0, cached, reused). These notebooks cover the first two.
+## Pipeline
 
-Both were tested on Kaggle with **2× NVIDIA T4**, and the table describes that setup. Data
-generation uses both T4s either way; the modes diverge once training starts.
+| Notebook | What it does |
+|----------|--------------|
+| `data-preparation.ipynb` | Regenerates 32,000 Magpie prompts with the verifier and pushes the JSONL to [`yosefw/magpie-llama-3.2-1b-instruct`](https://huggingface.co/datasets/yosefw/magpie-llama-3.2-1b-instruct) |
+| `train-llama-3.2-1b-instruct-dspark-online.ipynb` | Tokenizes that data, trains the drafter **online** against a live vLLM verifier, pushes `checkpoint_best`, then serves and evaluates it |
 
-| | offline | online |
-| --- | --- | --- |
-| Hidden states | extracted up front into `./output/hidden_states`, read via `--hidden-states-path` | fetched from the endpoint per batch (`--on-missing generate --on-generate delete`) |
-| vLLM server | shut down *before* training starts | must stay up for the entire training run |
-| Training | both T4s (`CUDA_VISIBLE_DEVICES=0,1`, `--nproc_per_node 2`) | GPU 1 only (`--nproc_per_node 1`) — GPU 0 is hosting the verifier |
-| Runs on 1 GPU? | yes | not really — the server would have to share the GPU with the trainer |
-| Cost | one extra extraction pass, and a lot of disk | no disk overhead, but the verifier occupies a GPU for the whole run |
-| Samples | 1200 | 1600 |
-| Wall clock (2× T4) | 5 h 53 min (1200 samples) | 8 h 54 min (1600 samples) |
+Online training keeps the verifier resident and fetches hidden states per batch instead of caching them to disk. That needs two GPUs — verifier on GPU 0, training on GPU 1.
 
-**Offline is strongly recommended if you have a single GPU** — it materializes the hidden states,
-frees the GPU, and then gives the whole thing to training, whereas online has the server and the
-trainer competing for the same memory the entire run. With two or more GPUs both work: offline
-still trains twice as wide, so pick online mainly when disk, not GPU count, is the tighter
-constraint.
-
-The wall-clock row is whole-notebook time — clone to Hub upload — at each notebook's own sample
-count, so it is not a clean head-to-head. The three-hour gap runs the same direction as the
-recommendation anyway: offline finishes sooner *despite* paying for an extra extraction pass,
-because training gets both GPUs. Runtime is roughly linear in the sample count, so scale these
-figures with the knob below.
+The data step is a one-off; its output is cached on the Hub, so retraining never re-runs generation.
 
 ## Run it
 
-**Prerequisites:** `vllm>=0.22.0`, a GPU (two if you want the online notebook), and a Hugging Face
-write token for the upload step. Everything else installs from inside the notebooks.
+**Prerequisites:** `vllm>=0.22.0`, two GPUs, and a Hugging Face write token.
 
-### 1. Train a drafter — pick one
+The notebooks read the token via `kaggle_secrets`. Off Kaggle that import fails; replace those cells with a direct `os.environ["HF_TOKEN"] = ...`.
 
-[**`[offline] train-dspark-drafter-qwen-3-0.6b.ipynb`**](notebooks/%5Boffline%5D%20train-dspark-drafter-qwen-3-0.6b.ipynb)
+Three things to keep in sync:
 
-clone `speculators` → regenerate + tokenize data → serve the verifier → extract hidden states →
-**stop the server** → train on both GPUs → push to
-[`yosefw/Qwen3-0.6B-DSpark-v2`](https://huggingface.co/yosefw/Qwen3-0.6B-DSpark-v2).
+- **Sample count** — `--limit` on response regeneration and `--max-samples` on `prepare_data.py`. Both default to 32,000; drop to ~200 to smoke-test.
+- **Sequence length** — `--seq-length` on `prepare_data.py` and `--total-seq-len` on `train.py`. Both are `2048` here; a mismatch silently truncates or wastes the tokenized data.
+- **`--target-layer-ids`** — `2 5 8 11 14` here. It must match in the vLLM launch and training cells, or the drafter trains against hidden states the server isn't exporting.
 
-[**`[online] train-dspark-drafter-qwen-3-0.6b.ipynb`**](notebooks/%5Bonline%5D%20train-dspark-drafter-qwen-3-0.6b.ipynb)
+Budget for a long session: the published model takes roughly **10–11 hours** to train on Kaggle's 2× T4.
 
-clone `speculators` → regenerate + tokenize data → serve the verifier → train against it live →
-push to [`yosefw/Qwen3-0.6B-DSpark`](https://huggingface.co/yosefw/Qwen3-0.6B-DSpark).
+## Model
 
-Both write `output/checkpoints/checkpoint_best` and upload it to the Hub. Budget for a long
-session: end to end on 2× T4 the offline notebook took **5 h 53 min** and the online one
-**8 h 54 min** — both fit a 12 h Kaggle session, neither by a comfortable margin. The sample count
-below is the lever if you need them shorter.
+- **Drafter** — [`rasyosef/Llama-3.2-1B-Instruct-speculator.dspark`](https://huggingface.co/rasyosef/Llama-3.2-1B-Instruct-speculator.dspark). Proposes 4 tokens per cycle for the verifier to check.
+- **Verifier** — [`unsloth/Llama-3.2-1B-Instruct`](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct). Validates each proposed block in a single forward pass, so output is identical to running the verifier alone.
 
-**The one knob that matters** is the sample count, and it appears in more than one place: `--limit`
-on response regeneration and `--max-samples` on `prepare_data.py` must always move together
-(offline has a third one to match, on `data_generation_offline.py`). The defaults are 1200 offline
-and 1600 online; drop them to ~200 to smoke-test the pipeline, and raise them well beyond the
-defaults for a drafter you actually plan to deploy.
+**Architecture:** 2 Qwen3 layers, ~0.25B params, bfloat16, block size 4, draft vocabulary reduced to 32,000 tokens.
 
-### 2. Evaluate it
+**Training:** 32,000 regenerated Magpie samples, 6 epochs, 96/4 split, AdamW at 6e-4, loss weights `{"ce": 0.1, "tv": 0.9}`, sequence length 2048, up to 128 anchors per sample.
 
-[**`evaluate-dspark-qwen-3-0.6b.ipynb`**](notebooks/evaluate-dspark-qwen-3-0.6b.ipynb)
+## Evaluation
 
-clone `speculators` → serve the drafter in vLLM, which pulls in its verifier automatically →
-`evaluate.py throughput` → acceptance metrics in `acceptance.csv`. Its `sweep` subcommand runs the
-full performance benchmark instead, across all 9
-[`RedHatAI/speculator_benchmarks`](https://huggingface.co/datasets/RedHatAI/speculator_benchmarks)
-subsets.
+Measured with `evaluate.py throughput` in the training notebook, against the drafter served in vLLM.
 
-Point it at either the Hub id or the local `checkpoint_best` path from step 1. Takes about
-**40 min** on 2× T4, most of it model download and server startup.
+| subset | acceptance_length | pos_0 | pos_1 | pos_2 | pos_3 |
+| --- | --- | --- | --- | --- | --- |
+| HumanEval | 2.927 | 75.4% | 54.0% | 37.6% | 25.8% |
+| tool_call | 2.601 | 67.7% | 45.6% | 28.9% | 17.9% |
+| math_reasoning | 2.585 | 69.6% | 45.7% | 27.8% | 15.4% |
+| translation | 2.347 | 57.4% | 37.2% | 28.9% | 11.2% |
+| writing | 2.336 | 58.7% | 35.8% | 22.9% | 16.1% |
+| question | 2.149 | 57.2% | 31.3% | 17.0% | 9.4% |
+| rag | 1.976 | 52.9% | 26.1% | 12.8% | 5.7% |
+| qa | 1.834 | 46.4% | 22.6% | 9.9% | 4.4% |
+| summarization | 1.736 | 46.0% | 18.6% | 6.7% | 2.3% |
 
-## Trained models
+`acceptance_length` is the mean tokens kept per verification round. `pos_N` is the percentage of blocks whose slot N survives verification, decaying across the block as intended. The two use different denominators, so `pos_N` does not sum to `acceptance_length`.
 
-The drafters these notebooks produced, on the Hugging Face Hub:
+Acceptance is highest on structured tasks (code, math, tool calls) and lowest on translation and summarization.
 
-| Model | Notebook | Verifier |
-| --- | --- | --- |
-| [`yosefw/Qwen3-0.6B-DSpark-v2`](https://huggingface.co/yosefw/Qwen3-0.6B-DSpark-v2) | offline, 1200 samples | [`Qwen/Qwen3-0.6B`](https://huggingface.co/Qwen/Qwen3-0.6B) |
-| [`yosefw/Qwen3-0.6B-DSpark`](https://huggingface.co/yosefw/Qwen3-0.6B-DSpark) | online, 1600 samples | [`Qwen/Qwen3-0.6B`](https://huggingface.co/Qwen/Qwen3-0.6B) |
+Weighted over 117,372 verification steps, acceptance length is **2.404** — an upper bound on single-stream speedup, since it does not charge for the drafter's own forward pass. Wall-clock throughput was not measured.
 
-Both are trained on small sample counts, so treat them as pipeline demonstrations rather than
-deployment-ready drafters.
+## Usage
 
-### Evaluation
+```bash
+vllm serve rasyosef/Llama-3.2-1B-Instruct-speculator.dspark \
+  --port 8000 \
+  --gpu-memory-utilization 0.75
+```
 
-Per-subset results for [`yosefw/Qwen3-0.6B-DSpark`](https://huggingface.co/yosefw/Qwen3-0.6B-DSpark)
-(the online-mode drafter, trained on 1600 samples), produced by
-[`evaluate-dspark-qwen-3-0.6b.ipynb`](notebooks/evaluate-dspark-qwen-3-0.6b.ipynb) —
-`evaluate.py throughput` against a vLLM server running the drafter on 2× T4:
+Query the OpenAI-compatible endpoint at `http://localhost:8000/v1`.
 
-| subset | num_drafts | num_draft_tokens | num_accepted_tokens | acceptance_length | acceptance_at_pos_0 | acceptance_at_pos_1 | acceptance_at_pos_2 | acceptance_at_pos_3 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| HumanEval | 225107 | 900428 | 196043 | 1.8709 | 0.2504 | 0.1168 | 0.0501 | 0.0204 |
-| math_reasoning | 59956 | 239824 | 58168 | 1.9702 | 0.2673 | 0.1351 | 0.0647 | 0.0281 |
-| qa | 20925 | 83700 | 16763 | 1.8011 | 0.2681 | 0.1258 | 0.0396 | 0.0188 |
-| question | 56063 | 224252 | 44305 | 1.7903 | 0.2753 | 0.1265 | 0.0543 | 0.0217 |
-| rag | 22824 | 91296 | 14539 | 1.637 | 0.2114 | 0.0898 | 0.039 | 0.0158 |
-| summarization | 20684 | 82736 | 10040 | 1.4854 | 0.1568 | 0.0569 | 0.0224 | 0.009 |
-| tool_call | 57005 | 228020 | 41188 | 1.7225 | 0.2036 | 0.0868 | 0.0384 | 0.0152 |
-| translation | 21638 | 86552 | 9425 | 1.4356 | 0.1433 | 0.0519 | 0.0182 | 0.0063 |
-| writing | 55683 | 222732 | 44927 | 1.8068 | 0.2074 | 0.0953 | 0.0435 | 0.019 |
+The drafter is not a standalone model — it only works paired with its verifier.
 
-`acceptance_length` is the mean number of tokens kept per verification round (`1 + accepted /
-drafts`), capped at 5 here because the drafter is trained with `--block-size 4`.
-`acceptance_at_pos_N` is how often the Nth drafted token in a block survives verification; it decays
-across the block, which is exactly what DSpark's semi-autoregressive head exists to slow down.
+## Credits and license
 
-Acceptance is highest on `math_reasoning` (1.970) and `HumanEval` (1.871) and lowest on
-`translation` (1.436) and `summarization` (1.485) — the drafter does best where the verifier's next
-token is most predictable. Across all subsets, weighted by `num_drafts`, acceptance length is
-**1.806** (435,398 accepted tokens over 539,885 drafts).
+Based on the official [speculators training](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/) and [performance evaluation](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/evaluating_performance/) tutorials, and on [`rasyosef/train-dspark-draft-models`](https://github.com/rasyosef/train-dspark-draft-models).
 
-Based on the official speculators
-[training](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/) and
-[evaluating performance](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/evaluating_performance/)
-tutorials.
-
-## License
-
-Apache-2.0 — see [`LICENSE`](LICENSE). Builds on
-[`speculators`](https://github.com/vllm-project/speculators), also Apache-2.0.
+Training code is Apache-2.0, matching `speculators`. The drafter weights inherit the Llama 3.2 Community License from their verifier.
