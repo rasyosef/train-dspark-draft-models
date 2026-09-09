@@ -9,7 +9,7 @@ DSpark builds on DFlash: instead of predicting the block autoregressively the wa
 - **Drafter** — 2 layers, ~0.25B params, proposes 4 tokens per cycle.
 - **Verifier** — the full `Llama-3.2-1B-Instruct`, checks each block in one forward pass, so output is identical to running it alone.
 - **Result** — **2.404** tokens accepted per verification round, 2.927 on HumanEval.
-- **Speedup** — **2.17x** wall-clock decode throughput (68.3 → 148.2 tok/s), up to 2.77x on HumanEval.
+- **Speedup** — **2.17x** wall-clock decode throughput (68.3 → 148.2 tok/s on a T4 GPU), up to 2.77x on HumanEval.
 - **Scope** — two notebooks: regenerate the data, train online against a live vLLM verifier, then serve and benchmark.
 
 ## Contents
@@ -108,7 +108,7 @@ Weighted over 117,372 verification steps, acceptance length is **2.404** — an 
 
 ### Wall-clock throughput
 
-Single-stream decode, same vLLM server with and without the drafter, 77 prompts.
+Single-stream decode, same vLLM server with and without the drafter, 77 prompts, T4 GPU.
 
 | category | n | base tok/s | spec tok/s | ratio | median |
 | --- | --- | --- | --- | --- | --- |
