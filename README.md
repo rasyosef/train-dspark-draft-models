@@ -1,4 +1,4 @@
-# train-dspark
+# train-dspark-draft-models
 
 Train and evaluate a [DSpark](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/dspark/) draft model for `Llama-3.2-1B-Instruct`, using the [`speculators`](https://github.com/vllm-project/speculators) library and vLLM.
 
@@ -9,6 +9,7 @@ DSpark builds on DFlash: instead of predicting the block autoregressively the wa
 - **Drafter** — 2 layers, ~0.25B params, proposes 4 tokens per cycle.
 - **Verifier** — the full `Llama-3.2-1B-Instruct`, checks each block in one forward pass, so output is identical to running it alone.
 - **Result** — **2.404** tokens accepted per verification round, 2.927 on HumanEval.
+- **Speedup** — **2.17x** wall-clock decode throughput (68.3 → 148.2 tok/s), up to 2.77x on HumanEval.
 - **Scope** — two notebooks: regenerate the data, train online against a live vLLM verifier, then serve and benchmark.
 
 ## Contents
@@ -103,7 +104,26 @@ Measured with `evaluate.py throughput` in the training notebook, against the dra
 
 Acceptance is highest on structured tasks (code, math, tool calls) and lowest on translation and summarization.
 
-Weighted over 117,372 verification steps, acceptance length is **2.404** — an upper bound on single-stream speedup, since it does not charge for the drafter's own forward pass. Wall-clock throughput was not measured.
+Weighted over 117,372 verification steps, acceptance length is **2.404** — an upper bound on single-stream speedup, since it does not charge for the drafter's own forward pass.
+
+### Wall-clock throughput
+
+Single-stream decode, same vLLM server with and without the drafter, 77 prompts.
+
+| category | n | base tok/s | spec tok/s | ratio | median |
+| --- | --- | --- | --- | --- | --- |
+| humaneval | 7 | 62.1 | 172.3 | **2.77x** | 2.58x |
+| math_reasoning | 10 | 64.8 | 177.4 | **2.74x** | 2.76x |
+| writing | 10 | 64.5 | 171.4 | **2.66x** | 2.62x |
+| question | 10 | 64.8 | 170.9 | **2.63x** | 2.62x |
+| tool_call | 8 | 72.3 | 165.1 | **2.28x** | 2.34x |
+| qa | 9 | 65.1 | 124.0 | **1.90x** | 1.91x |
+| translation | 8 | 67.8 | 113.9 | **1.68x** | 1.69x |
+| rag | 5 | 79.5 | 123.1 | **1.55x** | 1.59x |
+| summarization | 10 | 78.0 | 104.6 | **1.34x** | 1.32x |
+| **OVERALL** | **77** | **68.3** | **148.2** | **2.17x** | **2.08x** |
+
+`ratio` is the mean per-prompt speedup, `median` its median across prompts. The ordering tracks acceptance length closely — the tasks that draft well (code, math) convert their accepted tokens into real speedup, while summarization and rag barely clear 1.3–1.6x. Overall throughput lands at **2.17x**, below the 2.404 acceptance-length bound, which is the cost of the drafter's own forward pass.
 
 ## Credits and license
 
