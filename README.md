@@ -2,6 +2,10 @@
 
 Train and evaluate a [DSpark](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/dspark/) draft model for `Llama-3.2-1B-Instruct`, using the [`speculators`](https://github.com/vllm-project/speculators) library and vLLM.
 
+Speculative decoding speeds up inference by letting a small drafter propose several tokens at once, then having the full model verify the whole block in a single forward pass and keep the longest prefix it would have produced itself. Output is identical to running the verifier alone — the win is fewer verifier forward passes per token, not a different distribution. The metric that matters is *acceptance length*, the mean number of tokens kept per verification round.
+
+DSpark builds on DFlash: instead of predicting the block autoregressively the way EAGLE-3 does, it predicts the entire block in one forward pass using anchored block diffusion, conditioned on hidden states read from selected verifier layers (`--target-layer-ids 2 5 8 11 14` here). Pure block-parallel drafting leaves no dependency between tokens inside a block, so acceptance decays toward the block's end; DSpark restores that dependency with a *Markov head* — a low-rank logit bias conditioned on the previous token — and adds a *confidence head* that estimates per-position acceptance probability. The `pos_0`…`pos_3` decay in the [Evaluation](#evaluation) table below is exactly this within-block effect.
+
 - **Drafter** — 2 layers, ~0.25B params, proposes 4 tokens per cycle.
 - **Verifier** — the full `Llama-3.2-1B-Instruct`, checks each block in one forward pass, so output is identical to running it alone.
 - **Result** — **2.404** tokens accepted per verification round, 2.927 on HumanEval.
@@ -10,11 +14,11 @@ Train and evaluate a [DSpark](https://docs.vllm.ai/projects/speculators/en/lates
 ## Contents
 
 - [What's in here](#whats-in-here)
+- [Model](#model)
+- [Usage](#usage)
 - [Pipeline](#pipeline)
 - [Run it](#run-it)
-- [Model](#model)
 - [Evaluation](#evaluation)
-- [Usage](#usage)
 - [Credits and license](#credits-and-license)
 
 ## What's in here
@@ -32,6 +36,27 @@ Train and evaluate a [DSpark](https://docs.vllm.ai/projects/speculators/en/lates
 Everything runs inside the notebooks. Nothing to install; `speculators` is cloned at run time.
 
 `notebooks/qwen-3-0.6b/` is an earlier drafter trained against `Qwen/Qwen3-0.6B`, in both offline and online modes — see [its own README](notebooks/qwen-3-0.6b/README.md).
+
+## Model
+
+- **Drafter** — [`rasyosef/Llama-3.2-1B-Instruct-speculator.dspark`](https://huggingface.co/rasyosef/Llama-3.2-1B-Instruct-speculator.dspark). Proposes 4 tokens per cycle for the verifier to check.
+- **Verifier** — [`unsloth/Llama-3.2-1B-Instruct`](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct). Validates each proposed block in a single forward pass, so output is identical to running the verifier alone.
+
+**Architecture:** 2 Qwen3 layers, ~0.25B params, bfloat16, block size 4, draft vocabulary reduced to 32,000 tokens.
+
+**Training:** 32,000 regenerated Magpie samples, 6 epochs, 96/4 split, AdamW at 6e-4, loss weights `{"ce": 0.1, "tv": 0.9}`, sequence length 2048, up to 128 anchors per sample.
+
+## Usage
+
+```bash
+vllm serve rasyosef/Llama-3.2-1B-Instruct-speculator.dspark \
+  --port 8000 \
+  --gpu-memory-utilization 0.75
+```
+
+Query the OpenAI-compatible endpoint at `http://localhost:8000/v1`.
+
+The drafter is not a standalone model — it only works paired with its verifier.
 
 ## Pipeline
 
@@ -58,15 +83,6 @@ Three things to keep in sync:
 
 Budget for a long session: the published model takes roughly **10–11 hours** to train on Kaggle's 2× T4.
 
-## Model
-
-- **Drafter** — [`rasyosef/Llama-3.2-1B-Instruct-speculator.dspark`](https://huggingface.co/rasyosef/Llama-3.2-1B-Instruct-speculator.dspark). Proposes 4 tokens per cycle for the verifier to check.
-- **Verifier** — [`unsloth/Llama-3.2-1B-Instruct`](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct). Validates each proposed block in a single forward pass, so output is identical to running the verifier alone.
-
-**Architecture:** 2 Qwen3 layers, ~0.25B params, bfloat16, block size 4, draft vocabulary reduced to 32,000 tokens.
-
-**Training:** 32,000 regenerated Magpie samples, 6 epochs, 96/4 split, AdamW at 6e-4, loss weights `{"ce": 0.1, "tv": 0.9}`, sequence length 2048, up to 128 anchors per sample.
-
 ## Evaluation
 
 Measured with `evaluate.py throughput` in the training notebook, against the drafter served in vLLM.
@@ -88,18 +104,6 @@ Measured with `evaluate.py throughput` in the training notebook, against the dra
 Acceptance is highest on structured tasks (code, math, tool calls) and lowest on translation and summarization.
 
 Weighted over 117,372 verification steps, acceptance length is **2.404** — an upper bound on single-stream speedup, since it does not charge for the drafter's own forward pass. Wall-clock throughput was not measured.
-
-## Usage
-
-```bash
-vllm serve rasyosef/Llama-3.2-1B-Instruct-speculator.dspark \
-  --port 8000 \
-  --gpu-memory-utilization 0.75
-```
-
-Query the OpenAI-compatible endpoint at `http://localhost:8000/v1`.
-
-The drafter is not a standalone model — it only works paired with its verifier.
 
 ## Credits and license
 
