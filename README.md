@@ -107,6 +107,17 @@ Weighted over 117,372 verification steps, acceptance length is **2.404** — an 
 
 ## Credits and license
 
-Based on the official [speculators training](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/) and [performance evaluation](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/evaluating_performance/) tutorials, and on [`rasyosef/train-dspark-draft-models`](https://github.com/rasyosef/train-dspark-draft-models).
+**Built on**
 
-Training code is Apache-2.0, matching `speculators`. The drafter weights inherit the Llama 3.2 Community License from their verifier.
+- [`speculators`](https://github.com/vllm-project/speculators) — the DSpark trainer, converter, and `evaluate.py` used throughout, plus the official [training](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/) and [performance evaluation](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/evaluating_performance/) tutorials these notebooks follow.
+- [vLLM](https://github.com/vllm-project/vllm) — serves the verifier during online training and runs the speculative-decoding benchmark.
+- [Magpie-Align](https://huggingface.co/Magpie-Align) — the seed prompts behind `speculators`' built-in `--dataset magpie`, regenerated with the verifier in `data-preparation.ipynb`.
+- [`unsloth/Llama-3.2-1B-Instruct`](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct) — the verifier, a mirror of Meta's `Llama-3.2-1B-Instruct`.
+
+Trained on Kaggle's free 2× T4 accelerators.
+
+**License**
+
+- This repository — Apache-2.0, see [`LICENSE`](LICENSE), matching `speculators`.
+- The published drafter weights — subject to the [Llama 3.2 Community License](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/LICENSE), inherited from the verifier they are trained against and can only run with. Meta's [Acceptable Use Policy](https://www.llama.com/llama3_2/use-policy/) applies, as does the "Built with Llama" attribution requirement.
+- The regenerated dataset — Llama 3.2 outputs, so the same Llama 3.2 terms apply on top of the source dataset's own license.
