@@ -44,7 +44,7 @@ Both training notebooks use the same Open PerfectBlend data and differ in hardwa
 
 ## Model
 
-- **Drafter** — [`rasyosef/Llama-3.2-1B-Instruct-speculator.dspark`](https://huggingface.co/rasyosef/Llama-3.2-1B-Instruct-speculator.dspark). Proposes 8 tokens per cycle for the verifier to check.
+- **Drafter** — [`rasyosef/Llama-3.2-1B-Instruct-DSpark`](https://huggingface.co/rasyosef/Llama-3.2-1B-Instruct-DSpark). Proposes 8 tokens per cycle for the verifier to check.
 - **Verifier** — [`unsloth/Llama-3.2-1B-Instruct`](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct). Validates each proposed block in a single forward pass, so output is identical to running the verifier alone.
 
 **Architecture:** 3 Qwen3 layers (hidden size 2048, intermediate size 8192, 32 attention heads over 8 KV heads, sliding-window attention with a 2048-token window), ~0.3B params, bfloat16. Block size 8, draft vocabulary reduced to 32,000 tokens, aux hidden-state layers 2/8/14, confidence head with Markov (rank 256).
@@ -54,7 +54,7 @@ Both training notebooks use the same Open PerfectBlend data and differ in hardwa
 ## Usage
 
 ```bash
-vllm serve rasyosef/Llama-3.2-1B-Instruct-speculator.dspark \
+vllm serve rasyosef/Llama-3.2-1B-Instruct-DSpark \
   --port 8000 \
   --gpu-memory-utilization 0.8
 ```
