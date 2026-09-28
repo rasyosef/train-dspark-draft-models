@@ -1,20 +1,17 @@
 # train-dspark-draft-models
 
-Train and evaluate a [DSpark](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/dspark/) draft model for `Llama-3.2-1B-Instruct`, using the [`speculators`](https://github.com/vllm-project/speculators) library and vLLM.
+Train and evaluate [DSpark](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/dspark/) speculative decoding draft models for `Llama-3.2-3B-Instruct` ([`rasyosef/Llama-3.2-3B-Instruct-DSpark`](https://huggingface.co/rasyosef/Llama-3.2-3B-Instruct-DSpark)) and `Llama-3.2-1B-Instruct` ([`rasyosef/Llama-3.2-1B-Instruct-DSpark`](https://huggingface.co/rasyosef/Llama-3.2-1B-Instruct-DSpark)), using the [`speculators`](https://github.com/vllm-project/speculators) library and vLLM.
 
-Speculative decoding speeds up inference by letting a small drafter propose several tokens at once, then having the full model verify the whole block in a single forward pass and keep the longest prefix it would have produced itself. Output is identical to running the verifier alone — the win is fewer verifier forward passes per token, not a different distribution. The metric that matters is *acceptance length*, the mean number of tokens kept per verification round.
-
-DSpark builds on DFlash: instead of predicting the block autoregressively the way EAGLE-3 does, it predicts the entire block in one forward pass using anchored block diffusion, conditioned on hidden states read from selected verifier layers (`--target-layer-ids 2 8 14` here). Pure block-parallel drafting leaves no dependency between tokens inside a block, so acceptance decays toward the block's end; DSpark restores that dependency with a *Markov head* — a low-rank logit bias conditioned on the previous token — and adds a *confidence head* that estimates per-position acceptance probability. The `pos_0`…`pos_7` decay in the [Evaluation](#evaluation) table below is exactly this within-block effect.
-
-- **Drafter** — 3 layers, ~0.3B params, proposes 8 tokens per cycle.
-- **Verifier** — the full `Llama-3.2-1B-Instruct`, checks each block in one forward pass, so output is identical to running it alone.
-- **Data** — 100,000 [Open PerfectBlend](https://huggingface.co/datasets/mlabonne/open-perfectblend) prompts, regenerated on-policy by the verifier itself.
-- **Result** — **3.148** tokens accepted per verification round, 4.573 on HumanEval.
-- **Scope** — two notebooks: regenerate the data, train online against a live vLLM verifier, then serve and benchmark.
+- **Drafters** — 3B: 5 layers, ~0.7B params; 1B: 3 layers, ~0.3B params. Both propose 8 tokens per cycle.
+- **Verifiers** — the full `Llama-3.2-3B-Instruct` / `Llama-3.2-1B-Instruct`, checking each block in one forward pass, so output is identical to running the verifier alone.
+- **Data** — 100,000 [Open PerfectBlend](https://huggingface.co/datasets/mlabonne/open-perfectblend) prompts, regenerated on-policy by each verifier itself.
+- **Result** — 3B: **3.412** tokens accepted per verification round, 5.529 on math_reasoning. 1B: **3.148**, 4.573 on HumanEval.
+- **Scope** — regenerate the data, train online against a live vLLM verifier, then serve and benchmark: one notebook for 3B, two for 1B.
 
 ## Contents
 
 - [What's in here](#whats-in-here)
+- [How DSpark works](#how-dspark-works)
 - [Model](#model)
 - [Usage](#usage)
 - [Pipeline](#pipeline)
@@ -27,9 +24,11 @@ DSpark builds on DFlash: instead of predicting the block autoregressively the wa
 ```
 .
 ├── notebooks/
-│   ├── data-preparation.ipynb
-│   ├── [A100] train-dspark-llama-3.2-1B-instruct-online.ipynb
-│   ├── [2xT4 kaggle] train-dspark-llama-3.2-1B-instruct-online.ipynb
+│   ├── [3B][A100] Train-Llama-3.2-3B-DSpark-Online.ipynb
+│   ├── llama-1b-dspark/
+│   │   ├── data-preparation.ipynb
+│   │   ├── [A100] train-dspark-llama-3.2-1B-instruct-online.ipynb
+│   │   └── [2xT4 kaggle] train-dspark-llama-3.2-1B-instruct-online.ipynb
 │   ├── llama-1b-magpie-kaggle/
 │   └── qwen-3-0.6b/
 ├── LICENSE
@@ -38,9 +37,17 @@ DSpark builds on DFlash: instead of predicting the block autoregressively the wa
 
 Everything runs inside the notebooks. Nothing to install; `speculators` is cloned at run time.
 
-Both training notebooks use the same Open PerfectBlend data and differ in hardware and configuration: the A100 notebook produced the published drafter, while the 2× T4 Kaggle notebook is a smaller free-tier variant (2 layers, block 4, 80,000 samples, `--total-seq-len 4096`).
+The 3B notebook is self-contained: it regenerates the data, prepares it, trains online against the verifier, pushes the drafter, then serves and evaluates it, all on a single A100.
+
+The 1B notebooks live in `notebooks/llama-1b-dspark/`. Both 1B training notebooks use the same Open PerfectBlend data and differ in hardware and configuration: the A100 notebook produced the published drafter, while the 2× T4 Kaggle notebook is a smaller free-tier variant (2 layers, block 4, 80,000 samples, `--total-seq-len 4096`).
 
 `notebooks/llama-1b-magpie-kaggle/` holds the earlier Magpie-trained drafter, and `notebooks/qwen-3-0.6b/` an earlier drafter for `Qwen/Qwen3-0.6B` in both offline and online modes — see [its own README](notebooks/qwen-3-0.6b/README.md).
+
+## How DSpark works
+
+Speculative decoding speeds up inference by letting a small drafter propose several tokens at once, then having the full model verify the whole block in a single forward pass and keep the longest prefix it would have produced itself. Output is identical to running the verifier alone — the win is fewer verifier forward passes per token, not a different distribution. The metric that matters is *acceptance length*, the mean number of tokens kept per verification round.
+
+DSpark builds on DFlash: instead of predicting the block autoregressively the way EAGLE-3 does, it predicts the entire block in one forward pass using anchored block diffusion, conditioned on hidden states read from selected verifier layers (`--target-layer-ids 2 8 14` here). Pure block-parallel drafting leaves no dependency between tokens inside a block, so acceptance decays toward the block's end; DSpark restores that dependency with a *Markov head* — a low-rank logit bias conditioned on the previous token — and adds a *confidence head* that estimates per-position acceptance probability. The `pos_0`…`pos_7` decay in the [Evaluation](#evaluation) table below is exactly this within-block effect.
 
 ## Model
 
@@ -67,8 +74,9 @@ The drafter is not a standalone model — it only works paired with its verifier
 
 | Notebook | What it does |
 |----------|--------------|
-| `data-preparation.ipynb` | Regenerates Open PerfectBlend prompts with the verifier and pushes the JSONL to [`yosefw/magpie-llama-3.2-1b-instruct`](https://huggingface.co/datasets/yosefw/magpie-llama-3.2-1b-instruct) |
-| `[A100] train-dspark-llama-3.2-1B-instruct-online.ipynb` | Filters and tokenizes that data, trains the drafter **online** against a live vLLM verifier, pushes `checkpoint_best`, then serves and evaluates it |
+| `[3B][A100] Train-Llama-3.2-3B-DSpark-Online.ipynb` | End to end for 3B: regenerates Open PerfectBlend with `Llama-3.2-3B-Instruct` (pushed to [`yosefw/open-perfectblend-llama-3.2-3b-instruct`](https://huggingface.co/datasets/yosefw/open-perfectblend-llama-3.2-3b-instruct)), trains online, pushes `checkpoint_best`, then serves and evaluates it |
+| `llama-1b-dspark/data-preparation.ipynb` | Regenerates Open PerfectBlend prompts with the verifier and pushes the JSONL to [`yosefw/magpie-llama-3.2-1b-instruct`](https://huggingface.co/datasets/yosefw/magpie-llama-3.2-1b-instruct) |
+| `llama-1b-dspark/[A100] train-dspark-llama-3.2-1B-instruct-online.ipynb` | Filters and tokenizes that data, trains the drafter **online** against a live vLLM verifier, pushes `checkpoint_best`, then serves and evaluates it |
 
 Online training keeps the verifier resident and fetches hidden states per batch instead of caching them to disk — near-zero disk, but the verifier has to stay up for the whole run. On the A100 both jobs share one card: vLLM takes 25% for the verifier and its KV cache, training takes the rest. The 2× T4 notebook instead gives the verifier GPU 0 and trains on GPU 1.
 
@@ -90,7 +98,27 @@ Budget for a long session: this configuration takes several hours on a single A1
 
 ## Evaluation
 
-Measured with `evaluate.py throughput` in the training notebook, against the drafter served in vLLM, across the nine [`RedHatAI/speculator_benchmarks`](https://huggingface.co/datasets/RedHatAI/speculator_benchmarks) subsets.
+Measured with `evaluate.py throughput` in the training notebooks, against the drafter served in vLLM, across the nine [`RedHatAI/speculator_benchmarks`](https://huggingface.co/datasets/RedHatAI/speculator_benchmarks) subsets.
+
+`acceptance_length` is the mean tokens committed per verification round, including the bonus token — floor 1.0, ceiling 9.0 at block size 8. `pos_N` is the percentage of blocks whose slot N survives verification, decaying across the block as intended. The two use different denominators, so `pos_N` does not sum to `acceptance_length`. The weighted acceptance length is an upper bound on single-stream speedup, since it does not charge for the drafter's own forward pass.
+
+### Llama-3.2-3B-Instruct
+
+| subset | acceptance_length | pos_0 | pos_1 | pos_2 | pos_3 | pos_4 | pos_5 | pos_6 | pos_7 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| math_reasoning | 5.529 | 89.6% | 78.4% | 67.9% | 58.8% | 50.5% | 43.3% | 36.0% | 28.2% |
+| HumanEval | 5.058 | 85.6% | 72.6% | 61.6% | 52.3% | 43.7% | 36.3% | 29.9% | 23.8% |
+| tool_call | 3.492 | 73.6% | 54.2% | 39.5% | 28.6% | 20.8% | 14.8% | 10.5% | 7.2% |
+| question | 2.952 | 67.7% | 43.8% | 28.8% | 19.7% | 13.8% | 10.0% | 6.8% | 4.6% |
+| rag | 2.917 | 67.6% | 45.8% | 30.8% | 20.4% | 12.6% | 7.6% | 4.4% | 2.4% |
+| writing | 2.908 | 67.5% | 43.3% | 28.0% | 18.7% | 13.0% | 9.3% | 6.4% | 4.5% |
+| translation | 2.653 | 67.0% | 42.7% | 25.2% | 14.2% | 7.9% | 4.4% | 2.6% | 1.3% |
+| summarization | 2.597 | 65.6% | 40.5% | 23.9% | 13.9% | 8.0% | 4.3% | 2.2% | 1.2% |
+| qa | 2.241 | 55.0% | 31.6% | 17.9% | 9.4% | 5.0% | 2.7% | 1.6% | 0.8% |
+
+Weighted over 69,061 verification steps, acceptance length is **3.412**.
+
+### Llama-3.2-1B-Instruct
 
 | subset | acceptance_length | pos_0 | pos_1 | pos_2 | pos_3 | pos_4 | pos_5 | pos_6 | pos_7 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -104,9 +132,7 @@ Measured with `evaluate.py throughput` in the training notebook, against the dra
 | summarization | 2.182 | 58.5% | 31.0% | 16.3% | 7.6% | 3.2% | 1.1% | 0.4% | 0.1% |
 | translation | 2.021 | 54.6% | 28.6% | 12.6% | 4.3% | 1.3% | 0.5% | 0.2% | 0.0% |
 
-`acceptance_length` is the mean tokens committed per verification round, including the bonus token — floor 1.0, ceiling 9.0 at block size 8. `pos_N` is the percentage of blocks whose slot N survives verification, decaying across the block as intended. The two use different denominators, so `pos_N` does not sum to `acceptance_length`.
-
-Weighted over 89,102 verification steps, acceptance length is **3.148** — an upper bound on single-stream speedup, since it does not charge for the drafter's own forward pass.
+Weighted over 89,102 verification steps, acceptance length is **3.148**.
 
 Acceptance is highest where the verifier's next token is most predictable — code, math, structured tool calls. HumanEval and math_reasoning are far ahead of everything else and hold their lead deep into the block: HumanEval's pos_4 (36.8%) is above summarization's pos_1 (31.0%), and both still accept better than one token in six at pos_7. The prose-like subsets cluster tightly at 2.0–2.6 and fall off sharply after pos_3, where the longer block buys little — translation is under 2% accepted from pos_4 onward. A block of 8 pays for itself on code, math, and tool calls, and mostly idles on prose traffic.
 
