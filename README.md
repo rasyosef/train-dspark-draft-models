@@ -5,7 +5,7 @@ Train and evaluate [DSpark](https://docs.vllm.ai/projects/speculators/en/latest/
 - **Drafters** — 3B: 5 layers, ~0.7B params; 1B: 3 layers, ~0.3B params. Both propose 8 tokens per cycle.
 - **Verifiers** — the full `Llama-3.2-3B-Instruct` / `Llama-3.2-1B-Instruct`, checking each block in one forward pass, so output is identical to running the verifier alone.
 - **Data** — 100,000 [Open PerfectBlend](https://huggingface.co/datasets/mlabonne/open-perfectblend) prompts, regenerated on-policy by each verifier itself.
-- **Result** — 3B: **3.412** tokens accepted per verification round, 5.529 on math_reasoning. 1B: **3.148**, 4.573 on HumanEval.
+- **Result** — 3B: **3.412** tokens accepted per verification round, 5.529 on math_reasoning, for a **2.32×** average single-stream throughput gain (up to 3.62× on HumanEval). 1B: **3.148**, 4.573 on HumanEval.
 - **Scope** — regenerate the data, train online against a live vLLM verifier, then serve and benchmark: one notebook for 3B, two for 1B.
 
 ## Contents
@@ -127,9 +127,9 @@ Budget for a long session: each A100 run takes several hours on a single card, 3
 
 Measured with `evaluate.py throughput` in the training notebooks, against the drafter served in vLLM, across the nine [`RedHatAI/speculator_benchmarks`](https://huggingface.co/datasets/RedHatAI/speculator_benchmarks) subsets.
 
-`acceptance_length` is the mean tokens committed per verification round, including the bonus token — floor 1.0, ceiling 9.0 at block size 8. `pos_N` is the percentage of blocks whose slot N survives verification, decaying across the block as intended. The two use different denominators, so `pos_N` does not sum to `acceptance_length`. The weighted acceptance length is an upper bound on single-stream speedup, since it does not charge for the drafter's own forward pass.
+`acceptance_length` is the mean tokens committed per verification round, including the bonus token — floor 1.0, ceiling 9.0 at block size 8. `pos_N` is the percentage of blocks whose slot N survives verification, decaying across the block as intended. The two use different denominators, so `pos_N` does not sum to `acceptance_length`. The weighted acceptance length is an upper bound on single-stream speedup, since it does not charge for the drafter's own forward pass; measured throughput for 3B is reported below.
 
-### Llama-3.2-3B-Instruct
+### Llama-3.2-3B-Instruct-DSpark
 
 | subset | acceptance_length | pos_0 | pos_1 | pos_2 | pos_3 | pos_4 | pos_5 | pos_6 | pos_7 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -145,7 +145,25 @@ Measured with `evaluate.py throughput` in the training notebooks, against the dr
 
 Weighted over 69,061 verification steps, acceptance length is **3.412**.
 
-### Llama-3.2-1B-Instruct
+#### Throughput
+
+Measured wall-clock decode throughput in tokens/s on a single A100 at max concurrency 1, against the verifier served alone in vLLM as the baseline:
+
+| subset | baseline | DSpark | speedup |
+| --- | --- | --- | --- |
+| math_reasoning | 150.8 | 524.9 | **3.48×** |
+| HumanEval | 150.6 | 545.2 | **3.62×** |
+| tool_call | 147.8 | 337.7 | **2.28×** |
+| question | 149.9 | 335.9 | **2.24×** |
+| rag | 142.6 | 272.6 | **1.91×** |
+| writing | 150.8 | 273.5 | **1.81×** |
+| translation | 150.0 | 289.3 | **1.93×** |
+| summarization | 147.7 | 279.5 | **1.89×** |
+| qa | 150.3 | 259.1 | **1.72×** |
+
+Averaged across the nine subsets (unweighted), DSpark runs **2.32×** faster than the verifier alone (up to **3.62×** on HumanEval).
+
+### Llama-3.2-1B-Instruct-DSpark
 
 | subset | acceptance_length | pos_0 | pos_1 | pos_2 | pos_3 | pos_4 | pos_5 | pos_6 | pos_7 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
