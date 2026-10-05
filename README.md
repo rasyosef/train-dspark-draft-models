@@ -49,7 +49,7 @@ The 1B notebooks live in `notebooks/llama-1b-dspark/`. Both 1B training notebook
   <img src="assets/speculative-decoding.gif" width="720"
        alt="Animation: a small draft model proposes several tokens at once, and the target model verifies the whole block in one forward pass, keeping the accepted prefix">
   <br>
-  <em>Speculative decoding: the drafter proposes a block of tokens and the target (verifier) model checks them in a single pass. Animation from Liquid AI's <a href="https://www.liquid.ai/blog/lfm2.5-dspark">LFM2.5 DSpark blog post</a>.</em>
+  <em>Speculative decoding: the drafter proposes a block of tokens and the target (verifier) model checks them in a single pass.
 </p>
 
 Speculative decoding speeds up inference by letting a small drafter propose several tokens at once, then having the full model verify the whole block in a single forward pass and keep the longest prefix it would have produced itself. Output is identical to running the verifier alone — the win is fewer verifier forward passes per token, not a different distribution. The metric that matters is *acceptance length*, the mean number of tokens kept per verification round.
